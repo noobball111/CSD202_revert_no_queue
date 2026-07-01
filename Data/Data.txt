@@ -1,0 +1,2 @@
+Name|Type|Category|Exp|Amount|UPC|*args
+Ball|Clothes|Clothes|14/07/2026|10|1|XL|Black
