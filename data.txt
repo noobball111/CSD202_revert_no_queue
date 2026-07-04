@@ -1,0 +1,645 @@
+{
+  "products": [
+    {
+      "UPC": "12345",
+      "Name": "Chocolate Milk",
+      "attributes": [
+        {
+          "name": "UPC",
+          "value": "12345",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Name",
+          "value": "Chocolate Milk",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "SKU",
+          "value": "12345-Chocolate Milk",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Size",
+          "value": "XL",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Price",
+          "value": 4.99,
+          "type": "float",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "InStock",
+          "value": true,
+          "type": "int",
+          "is_enum": false,
+          "enum_name": null
+        }
+      ]
+    },
+    {
+      "UPC": "67890",
+      "Name": "Strawberry Yogurt",
+      "attributes": [
+        {
+          "name": "UPC",
+          "value": "67890",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Name",
+          "value": "Strawberry Yogurt",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "SKU",
+          "value": "67890-Strawberry Yogurt",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Size",
+          "value": "M",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Price",
+          "value": 3.49,
+          "type": "float",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "InStock",
+          "value": false,
+          "type": "int",
+          "is_enum": false,
+          "enum_name": null
+        }
+      ]
+    },
+    {
+      "UPC": "11111",
+      "Name": "Vanilla Ice Cream",
+      "attributes": [
+        {
+          "name": "UPC",
+          "value": "11111",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Name",
+          "value": "Vanilla Ice Cream",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "SKU",
+          "value": "11111-Vanilla Ice Cream",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Size",
+          "value": "L",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Price",
+          "value": 5.99,
+          "type": "float",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "InStock",
+          "value": true,
+          "type": "int",
+          "is_enum": false,
+          "enum_name": null
+        }
+      ]
+    },
+    {
+      "UPC": "22222",
+      "Name": "Blueberry Muffin",
+      "attributes": [
+        {
+          "name": "UPC",
+          "value": "22222",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Name",
+          "value": "Blueberry Muffin",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "SKU",
+          "value": "22222-Blueberry Muffin",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Size",
+          "value": "S",
+          "type": "string",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "Price",
+          "value": 2.49,
+          "type": "float",
+          "is_enum": false,
+          "enum_name": null
+        },
+        {
+          "name": "InStock",
+          "value": true,
+          "type": "int",
+          "is_enum": false,
+          "enum_name": null
+        }
+      ]
+    }
+  ],
+  "batches": [
+    {
+      "BatchID": 0,
+      "ProductUPC": "12345",
+      "Amount": 9,
+      "State": "Good",
+      "ImportedDate": "2026-07-04T09:53:08.254498",
+      "ExpirationDate": "2025-12-31T00:00:00"
+    },
+    {
+      "BatchID": 1,
+      "ProductUPC": "67890",
+      "Amount": 2,
+      "State": "ToBeReviewed",
+      "ImportedDate": "2026-07-04T09:53:08.263839",
+      "ExpirationDate": null
+    },
+    {
+      "BatchID": 2,
+      "ProductUPC": "11111",
+      "Amount": 13,
+      "State": "Good",
+      "ImportedDate": "2026-07-04T09:53:08.263857",
+      "ExpirationDate": "2025-06-15T00:00:00"
+    },
+    {
+      "BatchID": 3,
+      "ProductUPC": "22222",
+      "Amount": 1,
+      "State": "Good",
+      "ImportedDate": "2026-07-04T09:53:08.263927",
+      "ExpirationDate": null
+    },
+    {
+      "BatchID": 6,
+      "ProductUPC": "67890",
+      "Amount": 8,
+      "State": "Good",
+      "ImportedDate": "2026-07-04T09:53:44.572386",
+      "ExpirationDate": null
+    },
+    {
+      "BatchID": 7,
+      "ProductUPC": "12345",
+      "Amount": 87,
+      "State": "Good",
+      "ImportedDate": "2026-07-04T09:53:44.572393",
+      "ExpirationDate": null
+    },
+    {
+      "BatchID": 8,
+      "ProductUPC": "a",
+      "Amount": 33,
+      "State": "ToBeReviewed",
+      "ImportedDate": "2026-07-04T09:53:44.572407",
+      "ExpirationDate": null
+    }
+  ],
+  "enums": {
+    "Level_1": {
+      "type": "float",
+      "values": [
+        5.99,
+        10.5,
+        2.5,
+        20.0
+      ]
+    },
+    "Flavor_2": {
+      "type": "float",
+      "values": [
+        3.14,
+        1.0,
+        5.99,
+        10.5
+      ]
+    },
+    "Size_3": {
+      "type": "int",
+      "values": [
+        2,
+        100,
+        3,
+        50
+      ]
+    },
+    "Priority_4": {
+      "type": "int",
+      "values": [
+        2,
+        3,
+        10,
+        5
+      ]
+    },
+    "Color_5": {
+      "type": "string",
+      "values": [
+        "Red",
+        "Medium",
+        "Sweet",
+        "Green"
+      ]
+    }
+  },
+  "indexes": {
+    "product_keywords": {
+      "upc": [
+        "12345",
+        "22222",
+        "67890",
+        "11111"
+      ],
+      "12345": [
+        "12345"
+      ],
+      "upc:12345": [
+        "12345"
+      ],
+      "name": [
+        "12345",
+        "22222",
+        "67890",
+        "11111"
+      ],
+      "chocolate milk": [
+        "12345"
+      ],
+      "chocolate": [
+        "12345"
+      ],
+      "milk": [
+        "12345"
+      ],
+      "name:chocolate milk": [
+        "12345"
+      ],
+      "sku": [
+        "12345",
+        "22222",
+        "67890",
+        "11111"
+      ],
+      "12345-chocolate milk": [
+        "12345"
+      ],
+      "12345-chocolate": [
+        "12345"
+      ],
+      "sku:12345-chocolate milk": [
+        "12345"
+      ],
+      "size": [
+        "11111",
+        "22222",
+        "12345",
+        "67890"
+      ],
+      "xl": [
+        "12345"
+      ],
+      "size:xl": [
+        "12345"
+      ],
+      "price": [
+        "11111",
+        "22222",
+        "12345",
+        "67890"
+      ],
+      "4.99": [
+        "12345"
+      ],
+      "price:4.99": [
+        "12345"
+      ],
+      "instock": [
+        "11111",
+        "22222",
+        "12345",
+        "67890"
+      ],
+      "true": [
+        "11111",
+        "22222",
+        "12345"
+      ],
+      "instock:true": [
+        "11111",
+        "22222",
+        "12345"
+      ],
+      "67890": [
+        "67890"
+      ],
+      "upc:67890": [
+        "67890"
+      ],
+      "strawberry yogurt": [
+        "67890"
+      ],
+      "strawberry": [
+        "67890"
+      ],
+      "yogurt": [
+        "67890"
+      ],
+      "name:strawberry yogurt": [
+        "67890"
+      ],
+      "67890-strawberry yogurt": [
+        "67890"
+      ],
+      "67890-strawberry": [
+        "67890"
+      ],
+      "sku:67890-strawberry yogurt": [
+        "67890"
+      ],
+      "m": [
+        "67890"
+      ],
+      "size:m": [
+        "67890"
+      ],
+      "3.49": [
+        "67890"
+      ],
+      "price:3.49": [
+        "67890"
+      ],
+      "false": [
+        "67890"
+      ],
+      "instock:false": [
+        "67890"
+      ],
+      "11111": [
+        "11111"
+      ],
+      "upc:11111": [
+        "11111"
+      ],
+      "vanilla ice cream": [
+        "11111"
+      ],
+      "vanilla": [
+        "11111"
+      ],
+      "ice": [
+        "11111"
+      ],
+      "cream": [
+        "11111"
+      ],
+      "name:vanilla ice cream": [
+        "11111"
+      ],
+      "11111-vanilla ice cream": [
+        "11111"
+      ],
+      "11111-vanilla": [
+        "11111"
+      ],
+      "sku:11111-vanilla ice cream": [
+        "11111"
+      ],
+      "l": [
+        "11111"
+      ],
+      "size:l": [
+        "11111"
+      ],
+      "5.99": [
+        "11111"
+      ],
+      "price:5.99": [
+        "11111"
+      ],
+      "22222": [
+        "22222"
+      ],
+      "upc:22222": [
+        "22222"
+      ],
+      "blueberry muffin": [
+        "22222"
+      ],
+      "blueberry": [
+        "22222"
+      ],
+      "muffin": [
+        "22222"
+      ],
+      "name:blueberry muffin": [
+        "22222"
+      ],
+      "22222-blueberry muffin": [
+        "22222"
+      ],
+      "22222-blueberry": [
+        "22222"
+      ],
+      "sku:22222-blueberry muffin": [
+        "22222"
+      ],
+      "s": [
+        "22222"
+      ],
+      "size:s": [
+        "22222"
+      ],
+      "2.49": [
+        "22222"
+      ],
+      "price:2.49": [
+        "22222"
+      ]
+    },
+    "batch_keywords": {
+      "good": [
+        0,
+        2,
+        3,
+        6,
+        7
+      ],
+      "state:good": [
+        0,
+        2,
+        3,
+        6,
+        7
+      ],
+      "hasexpiration": [
+        0,
+        2
+      ],
+      "tobereviewed": [
+        8,
+        1
+      ],
+      "state:tobereviewed": [
+        8,
+        1
+      ],
+      "noexpiration": [
+        1,
+        3,
+        6,
+        7,
+        8
+      ]
+    },
+    "product_to_batch": {
+      "12345": [
+        0,
+        7
+      ],
+      "67890": [
+        1,
+        6
+      ],
+      "11111": [
+        2
+      ],
+      "22222": [
+        3
+      ],
+      "a": [
+        8
+      ]
+    },
+    "product_numeric": {},
+    "product_delta_numeric": {},
+    "batch_numeric": {
+      "amount": [
+        [
+          1,
+          3
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          8,
+          6
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          13,
+          2
+        ],
+        [
+          33,
+          8
+        ],
+        [
+          87,
+          7
+        ]
+      ],
+      "importeddate": [
+        [
+          1783133588.254498,
+          0
+        ],
+        [
+          1783133588.263839,
+          1
+        ],
+        [
+          1783133588.263857,
+          2
+        ],
+        [
+          1783133588.263927,
+          3
+        ],
+        [
+          1783133624.572386,
+          6
+        ],
+        [
+          1783133624.572393,
+          7
+        ],
+        [
+          1783133624.572407,
+          8
+        ]
+      ],
+      "expirationdate": [
+        [
+          1749920400.0,
+          2
+        ],
+        [
+          1767114000.0,
+          0
+        ]
+      ]
+    },
+    "batch_delta_numeric": {}
+  }
+}
