@@ -1213,45 +1213,357 @@ class BatchEditor:
         if not query.strip():
             return list(self.StorageManager.BatchByID.keys())
 
-        include = []
-        exclude = []
+        include_tokens = []
+        exclude_tokens = []
         for token in query.split():
             token = token.strip()
             if not token:
                 continue
             if token.startswith('-'):
-                exclude.append(token[1:].strip().lower())
+                exclude_tokens.append(token[1:].strip().lower())
             else:
-                include.append(token.strip().lower())
+                include_tokens.append(token.strip().lower())
 
-        include_sets = []
-        for kw in include:
-            s = self._getBatchIDsForKeyword(kw)
-            if s:
-                include_sets.append(s)
-
-        if include_sets:
-            result = min(include_sets, key=len)
-            for s in include_sets:
-                if s is not result:
-                    result = result.intersection(s)
-        else:
+        if not include_tokens:
             result = set(self.StorageManager.BatchByID.keys())
+        else:
+            clauses = [self._parseClauseInfo(t) for t in include_tokens]
+            keyword_clauses = [c for c in clauses if c['type'] == 'keyword']
+            numeric_clauses = [c for c in clauses if c['type'] == 'numeric']
 
-        for kw in exclude:
-            s = self._getBatchIDsForKeyword(kw)
+            if not numeric_clauses:
+                # Pure keyword AND: every clause is already a set reference (no
+                # copy), and `&` between real sets runs in C at O(min(len)) —
+                # no per-candidate Python-level work needed at all.
+                keyword_clauses.sort(key=lambda c: c['size'])
+                result = keyword_clauses[0]['set']
+                for c in keyword_clauses[1:]:
+                    result = result & c['set']
+            else:
+                # A numeric clause forces a Batch object fetch per candidate to
+                # read its value (BatchNumericIndexes has no id->value reverse
+                # lookup) — and in CPython that per-candidate `dict[key]` hash
+                # lookup is far more expensive than a plain attribute read.
+                # A single pass over BatchByID.items() gets (id, batch) pairs
+                # for free with zero hashing, so it beats any index-driven plan
+                # unless the index can skip the vast majority of rows. Mirrors
+                # a real query planner choosing index-scan vs table-scan by
+                # selectivity.
+                total = len(self.StorageManager.BatchByID)
+                smallest = min((c['size'] for c in clauses), default=total)
+                if total == 0 or smallest > total * self._FULL_SCAN_SELECTIVITY_THRESHOLD:
+                    result = self._fullScanFilter(clauses)
+                else:
+                    clauses.sort(key=lambda c: c['size'])
+                    result = self._evaluateOrderedClauses(clauses)
+
+        for t in exclude_tokens:
+            s = self._clauseSetRef(t)
             if s:
-                result = result.difference(s)
+                result = result - s
 
         return sorted(result)
+
+    # Below this fraction of the table, an index-driven candidate set is worth
+    # the per-candidate Batch lookup; above it, a single full-table pass wins.
+    _FULL_SCAN_SELECTIVITY_THRESHOLD = 0.15
+
+    def _keywordDirectMatch(self, keyword: str, batch) -> bool:
+        """Test a batch keyword against the Batch object's own fields — the
+        same values BatchKeywordIndex was built from — so a full-table scan
+        never needs to hash `bid` into a set."""
+        state = batch.State.lower()
+        if keyword == state or keyword == f"state:{state}":
+            return True
+        exp_key = "noexpiration" if batch.ExpirationDate is None else "hasexpiration"
+        return keyword == exp_key
+
+    def _fullScanFilter(self, clauses: list) -> Set[int]:
+        keyword_clauses = [c for c in clauses if c['type'] == 'keyword']
+        numeric_clauses = [c for c in clauses if c['type'] == 'numeric']
+
+        # Common case: one state/expiration keyword AND one numeric range, with
+        # no product-attribute overlap. Every extra per-row method call (bound
+        # method dispatch, dict lookup for the field accessor) is pure overhead
+        # at 10^6 rows, so this path inlines the comparison directly instead of
+        # going through _keywordDirectMatch / _numericAccessorMatch per row.
+        if (len(keyword_clauses) == 1 and len(numeric_clauses) == 1
+                and not self.StorageManager.GetProductsByKeyword(keyword_clauses[0]['keyword'])):
+            kw = keyword_clauses[0]['keyword']
+            if kw in ('good', 'tobereviewed'):
+                nc = numeric_clauses[0]
+                fast = self._fullScanFilterFast(kw, nc['field'], nc['op'], nc['value'])
+                if fast is not None:
+                    return fast
+
+        # Product-keyword membership is resolved once per clause (outside the
+        # loop) into a small UPC set; per-row it's a cheap `in` check, not a
+        # `dict[bid]`-style hash lookup.
+        keyword_lookups = [
+            (c['keyword'], self.StorageManager.GetProductsByKeyword(c['keyword']))
+            for c in keyword_clauses
+        ]
+
+        result = set()
+        for bid, batch in self.StorageManager.BatchByID.items():
+            ok = True
+            for kw, upcs in keyword_lookups:
+                if not (self._keywordDirectMatch(kw, batch) or (upcs and batch.ProductUPC in upcs)):
+                    ok = False
+                    break
+            if ok:
+                for c in numeric_clauses:
+                    if not self._numericAccessorMatch(c, batch):
+                        ok = False
+                        break
+            if ok:
+                result.add(bid)
+        return result
+
+    def _fullScanFilterFast(self, kw: str, field: str, op: str, value: float):
+        """Inlined single-keyword + single-numeric-range full scan. Returns
+        None if `field` isn't one it knows how to inline (caller falls back)."""
+        items = self.StorageManager.BatchByID.items()
+        result = set()
+
+        if field == 'amount':
+            if op == '>':
+                for bid, batch in items:
+                    if batch.Amount > value and batch.State.lower() == kw:
+                        result.add(bid)
+            elif op == '>=':
+                for bid, batch in items:
+                    if batch.Amount >= value and batch.State.lower() == kw:
+                        result.add(bid)
+            elif op == '<':
+                for bid, batch in items:
+                    if batch.Amount < value and batch.State.lower() == kw:
+                        result.add(bid)
+            elif op == '<=':
+                for bid, batch in items:
+                    if batch.Amount <= value and batch.State.lower() == kw:
+                        result.add(bid)
+            elif op == '==':
+                for bid, batch in items:
+                    if batch.Amount == value and batch.State.lower() == kw:
+                        result.add(bid)
+            elif op == '!=':
+                for bid, batch in items:
+                    if batch.Amount != value and batch.State.lower() == kw:
+                        result.add(bid)
+            else:
+                return None
+            return result
+
+        return None
 
     # Compiled once at class level – matches "amount>=10", "amount>5.5", etc.
     _NUMERIC_RE = __import__('re').compile(r'^([a-z_]\w*)(>=|<=|==|!=|>|<)([\d.]+)$')
 
-    def _getBatchIDsForKeyword(self, keyword: str) -> Set[int]:
+    _NUMERIC_FIELD_ACCESSORS = {
+        'amount': lambda b: b.Amount,
+        'importeddate': lambda b: b.ImportedDate.timestamp() if b.ImportedDate else None,
+        'expirationdate': lambda b: b.ExpirationDate.timestamp() if b.ExpirationDate else None,
+    }
+
+    @staticmethod
+    def _numericOpMatch(op: str, v, value: float) -> bool:
+        if op == '>':  return v >  value
+        if op == '>=': return v >= value
+        if op == '<':  return v <  value
+        if op == '<=': return v <= value
+        if op == '==': return v == value
+        if op == '!=': return v != value
+        return False
+
+    def _parseClauseInfo(self, token: str) -> dict:
+        m = self._NUMERIC_RE.match(token)
+        if m:
+            field, op, raw = m.group(1), m.group(2), m.group(3)
+            try:
+                value = float(raw)
+            except ValueError:
+                return {'type': 'numeric', 'field': None, 'op': op, 'value': None, 'size': 0}
+            return {'type': 'numeric', 'field': field, 'op': op, 'value': value,
+                    'size': self._numericMatchCount(field, op, value)}
+        kw_set = self._clauseSetRef(token)
+        return {'type': 'keyword', 'keyword': token, 'set': kw_set, 'size': len(kw_set)}
+
+    def _numericMatchCount(self, field: str, op: str, value: float) -> int:
+        """O(log N) cardinality estimate — bisect only, no materialization."""
         import bisect
-        keyword = keyword.lower()
+        main = self.StorageManager.BatchNumericIndexes.get(field, [])
+        count = 0
+        if main:
+            vals = self.StorageManager.GetBatchNumericValues(field)
+            lo = bisect.bisect_left(vals, value)
+            hi = bisect.bisect_right(vals, value)
+            if op == '>':    count += len(main) - hi
+            elif op == '>=': count += len(main) - lo
+            elif op == '<':  count += lo
+            elif op == '<=': count += hi
+            elif op == '==': count += hi - lo
+            elif op == '!=': count += len(main) - (hi - lo)
+
+        delta = self.StorageManager.BatchDeltaNumericIndexes.get(field, [])
+        for v, _ in delta:
+            if self._numericOpMatch(op, v, value):
+                count += 1
+        return count
+
+    def _numericAccessorMatch(self, clause: dict, batch) -> bool:
+        accessor = self._NUMERIC_FIELD_ACCESSORS.get(clause['field'])
+        if accessor is None:
+            return False
+        v = accessor(batch)
+        return v is not None and self._numericOpMatch(clause['op'], v, clause['value'])
+
+    def _numericRawParts(self, field: str, op: str, value: float):
+        """Slices of the sorted main index (still (value, bid) pairs — not
+        flattened to a bid-only set) plus matching delta bids. Lets the caller
+        stream-filter candidates in one pass instead of materializing a bid set
+        first and filtering it in a second pass."""
+        import bisect
+        main = self.StorageManager.BatchNumericIndexes.get(field, [])
+        parts = []
+        if main:
+            vals = self.StorageManager.GetBatchNumericValues(field)
+            if op == '>':
+                parts.append(main[bisect.bisect_right(vals, value):])
+            elif op == '>=':
+                parts.append(main[bisect.bisect_left(vals, value):])
+            elif op == '<':
+                parts.append(main[:bisect.bisect_left(vals, value)])
+            elif op == '<=':
+                parts.append(main[:bisect.bisect_right(vals, value)])
+            elif op == '==':
+                lo = bisect.bisect_left(vals, value)
+                hi = bisect.bisect_right(vals, value)
+                parts.append(main[lo:hi])
+            elif op == '!=':
+                lo = bisect.bisect_left(vals, value)
+                hi = bisect.bisect_right(vals, value)
+                parts.append(main[:lo])
+                parts.append(main[hi:])
+
+        delta = self.StorageManager.BatchDeltaNumericIndexes.get(field, [])
+        delta_bids = [bid for v, bid in delta if self._numericOpMatch(op, v, value)]
+        return parts, delta_bids
+
+    def _evaluateOrderedClauses(self, clauses: list) -> Set[int]:
+        """clauses is sorted ascending by cheap size estimate. Stream the
+        smallest clause's raw candidates through the remaining clauses' tests
+        in a single pass — no clause besides the anchor ever gets fully
+        materialized into its own standalone set."""
+        anchor = clauses[0]
+        rest = clauses[1:]
+        keyword_sets = [c['set'] for c in rest if c['type'] == 'keyword']
+        numeric_rest = [c for c in rest if c['type'] == 'numeric']
+        byid = self.StorageManager.BatchByID
+
+        def passes_rest(bid):
+            if any(bid not in s for s in keyword_sets):
+                return False
+            if numeric_rest:
+                batch = byid.get(bid)
+                if batch is None or any(not self._numericAccessorMatch(c, batch) for c in numeric_rest):
+                    return False
+            return True
+
+        if anchor['type'] == 'keyword':
+            base = anchor['set']
+            if not rest:
+                return base
+            if not numeric_rest:
+                result = base
+                for s in keyword_sets:
+                    result = result & s
+                return result
+            return {bid for bid in base if passes_rest(bid)}
+
+        # Anchor is numeric: stream the sorted-index slice(s) directly.
+        parts, delta_bids = self._numericRawParts(anchor['field'], anchor['op'], anchor['value'])
+        if not rest:
+            result = set()
+            for part in parts:
+                result.update(bid for _, bid in part)
+            result.update(delta_bids)
+            return result
+
+        result = set()
+        for part in parts:
+            for _, bid in part:
+                if passes_rest(bid):
+                    result.add(bid)
+        for bid in delta_bids:
+            if passes_rest(bid):
+                result.add(bid)
+        return result
+
+    def _clauseSetRef(self, token: str) -> Set[int]:
+        """Return a set for `token` — a direct reference to the stored keyword
+        set when possible (no copy), or the bisect-built matches for numeric
+        clauses. Safe to intersect/subtract since & and - never mutate operands."""
+        m = self._NUMERIC_RE.match(token)
+        if m:
+            field, op, raw = m.group(1), m.group(2), m.group(3)
+            try:
+                value = float(raw)
+            except ValueError:
+                return set()
+            return self._numericMatches(field, op, value)
+
+        base = self.StorageManager.BatchKeywordIndex.get(token)
+        upcs = self.StorageManager.GetProductsByKeyword(token)
+        if not upcs:
+            return base if base is not None else set()
+
+        # Rare path: keyword also matches product attributes — union is
+        # unavoidable here, but this branch isn't hit by plain state/date terms.
+        ids = set(base) if base else set()
+        for upc in upcs:
+            s = self.StorageManager.ProductToBatchIndex.get(upc)
+            if s:
+                ids |= s
+        return ids
+
+    def _numericMatches(self, field: str, op: str, value: float) -> Set[int]:
+        import bisect
         batch_ids = set()
+
+        # Main index is sorted → use bisect for O(log N + K)
+        main = self.StorageManager.BatchNumericIndexes.get(field, [])
+        if main:
+            vals = self.StorageManager.GetBatchNumericValues(field)
+            if op == '>':
+                batch_ids.update(bid for _, bid in main[bisect.bisect_right(vals, value):])
+            elif op == '>=':
+                batch_ids.update(bid for _, bid in main[bisect.bisect_left(vals, value):])
+            elif op == '<':
+                batch_ids.update(bid for _, bid in main[:bisect.bisect_left(vals, value)])
+            elif op == '<=':
+                batch_ids.update(bid for _, bid in main[:bisect.bisect_right(vals, value)])
+            elif op == '==':
+                lo = bisect.bisect_left(vals, value)
+                hi = bisect.bisect_right(vals, value)
+                batch_ids.update(bid for _, bid in main[lo:hi])
+            elif op == '!=':
+                lo = bisect.bisect_left(vals, value)
+                hi = bisect.bisect_right(vals, value)
+                batch_ids.update(bid for _, bid in main[:lo])
+                batch_ids.update(bid for _, bid in main[hi:])
+
+        # Delta index is unsorted → linear scan
+        delta = self.StorageManager.BatchDeltaNumericIndexes.get(field, [])
+        for v, bid in delta:
+            if self._numericOpMatch(op, v, value):
+                batch_ids.add(bid)
+
+        debug_print(f"Numeric query '{field}{op}{value:g}': {len(batch_ids)} matches")
+        return batch_ids
+
+    def _getBatchIDsForKeyword(self, keyword: str) -> Set[int]:
+        keyword = keyword.lower()
 
         # ---- Numeric comparison: field>=X  field<=X  field>X  field<X  field==X  field!=X ----
         m = self._NUMERIC_RE.match(keyword)
@@ -1261,44 +1573,11 @@ class BatchEditor:
             try:
                 value = float(m.group(3))
             except ValueError:
-                return batch_ids
-
-            # Main index is sorted → use bisect for O(log N + K)
-            main = self.StorageManager.BatchNumericIndexes.get(field, [])
-            if main:
-                vals = [e[0] for e in main]
-                if op == '>':
-                    batch_ids.update(bid for _, bid in main[bisect.bisect_right(vals, value):])
-                elif op == '>=':
-                    batch_ids.update(bid for _, bid in main[bisect.bisect_left(vals, value):])
-                elif op == '<':
-                    batch_ids.update(bid for _, bid in main[:bisect.bisect_left(vals, value)])
-                elif op == '<=':
-                    batch_ids.update(bid for _, bid in main[:bisect.bisect_right(vals, value)])
-                elif op == '==':
-                    lo = bisect.bisect_left(vals, value)
-                    hi = bisect.bisect_right(vals, value)
-                    batch_ids.update(bid for _, bid in main[lo:hi])
-                elif op == '!=':
-                    lo = bisect.bisect_left(vals, value)
-                    hi = bisect.bisect_right(vals, value)
-                    batch_ids.update(bid for _, bid in main[:lo])
-                    batch_ids.update(bid for _, bid in main[hi:])
-
-            # Delta index is unsorted → linear scan
-            delta = self.StorageManager.BatchDeltaNumericIndexes.get(field, [])
-            for v, bid in delta:
-                if   op == '>'  and v >  value: batch_ids.add(bid)
-                elif op == '>=' and v >= value: batch_ids.add(bid)
-                elif op == '<'  and v <  value: batch_ids.add(bid)
-                elif op == '<=' and v <= value: batch_ids.add(bid)
-                elif op == '==' and v == value: batch_ids.add(bid)
-                elif op == '!=' and v != value: batch_ids.add(bid)
-
-            debug_print(f"Numeric query '{keyword}': {len(batch_ids)} matches")
-            return batch_ids
+                return set()
+            return self._numericMatches(field, op, value)
 
         # ---- Text keyword lookup ----
+        batch_ids = set()
         if keyword in self.StorageManager.BatchKeywordIndex:
             batch_ids.update(self.StorageManager.BatchKeywordIndex[keyword])
 

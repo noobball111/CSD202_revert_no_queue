@@ -22,6 +22,18 @@ class StorageManager:
         # Numeric indexes for batches
         self.BatchNumericIndexes = dict()        # field -> list of (value, batchID)
         self.BatchDeltaNumericIndexes = dict()   # field -> list of (value, batchID) for recent additions
+        self._BatchNumericValuesCache = dict()   # field -> list of just values, kept in sync with BatchNumericIndexes[field]
+
+    def GetBatchNumericValues(self, field: str):
+        """Return the sorted list of values for `field`, cached so bisect queries don't
+        pay an O(N) extraction cost on every call."""
+        field = field.lower()
+        cached = self._BatchNumericValuesCache.get(field)
+        if cached is None:
+            entries = self.BatchNumericIndexes.get(field, [])
+            cached = [v for v, _ in entries]
+            self._BatchNumericValuesCache[field] = cached
+        return cached
 
     def _addProductAttributeName(self, field: str):
         field = field.lower()
@@ -44,12 +56,10 @@ class StorageManager:
         return self.ProductKeywordIndex.get(keyword, set())
 
     def AddProduct(self, product):
-        """Add a product and index its attributes (both string and numeric)."""
         self.Products[product.UPC.Value] = product
         self._indexProduct(product)
 
     def RemoveProduct(self, product):
-        """Remove a product and delete its entries from all indexes."""
         if product.UPC.Value in self.Products:
             del self.Products[product.UPC.Value]
         self._removeProduct(product)
@@ -138,6 +148,7 @@ class StorageManager:
                     empty_fields.append(field)
             for f in empty_fields:
                 del store[f]
+        self._BatchNumericValuesCache.clear()
 
         return len(ids_to_remove)
 
@@ -155,6 +166,7 @@ class StorageManager:
         self.BatchKeywordIndex.clear()
         self.BatchNumericIndexes.clear()
         self.BatchDeltaNumericIndexes.clear()
+        self._BatchNumericValuesCache.clear()
 
         for batch in self.BatchByID.values():
             self._indexBatch(batch, useDelta=False)
@@ -278,6 +290,7 @@ class StorageManager:
         if field not in self.BatchNumericIndexes:
             self.BatchNumericIndexes[field] = []
         self.BatchNumericIndexes[field].append((value, batchID))
+        self._BatchNumericValuesCache.pop(field, None)
 
     def _addToBatchDeltaNumeric(self, field: str, value: int | float, batchID: int):
         field = field.lower()
@@ -292,6 +305,8 @@ class StorageManager:
             target[field] = [(v, b) for v, b in target[field] if not (v == value and b == batchID)]
             if not target[field]:
                 del target[field]
+        if not delta:
+            self._BatchNumericValuesCache.pop(field, None)
 
     def OptimizeDatabase(self):
         # Merge product delta into product main
@@ -308,4 +323,5 @@ class StorageManager:
                 self.BatchNumericIndexes[field] = []
             self.BatchNumericIndexes[field].extend(delta)
             self.BatchNumericIndexes[field].sort(key=lambda x: x[0])
+            self._BatchNumericValuesCache.pop(field, None)
         self.BatchDeltaNumericIndexes.clear()
