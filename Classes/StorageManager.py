@@ -1,19 +1,14 @@
-import json
-import os
-import datetime as dt
 from typing import Set
 from .Product import Product, Attribute
 from .Batch import Batch
-from . import Batch as BatchModule
 
 
-class   StorageManager:
+class StorageManager:
     def __init__(self):
         self.Products = dict()
         self.BatchByID = dict()
 
         self.ProductAttributeNameCounts = {}
-        self.ProductEnum = None
 
         # Keyword indexes
         self.ProductKeywordIndex = dict()    # key -> set of UPCs
@@ -28,7 +23,6 @@ class   StorageManager:
         self.BatchNumericIndexes = dict()        # field -> list of (value, batchID)
         self.BatchDeltaNumericIndexes = dict()   # field -> list of (value, batchID) for recent additions
 
-    # ---------- Attribute name tracking ----------
     def _addProductAttributeName(self, field: str):
         field = field.lower()
         if field not in self.ProductAttributeNameCounts:
@@ -49,33 +43,6 @@ class   StorageManager:
         keyword = keyword.lower()
         return self.ProductKeywordIndex.get(keyword, set())
 
-    def GetBatchIDsByNumericComparison(self, field: str, operator: str, value: float) -> Set[int]:
-        field = field.lower()
-        batch_ids = set()
-
-        def matches(v: float) -> bool:
-            if operator == ">":
-                return v > value
-            if operator == "<":
-                return v < value
-            if operator == ">=":
-                return v >= value
-            if operator == "<=":
-                return v <= value
-            if operator in ("=", "=="):
-                return v == value
-            return False
-
-        for index_dict in (self.BatchNumericIndexes, self.BatchDeltaNumericIndexes):
-            if field not in index_dict:
-                continue
-            for v, batch_id in index_dict[field]:
-                if matches(v):
-                    batch_ids.add(batch_id)
-
-        return batch_ids
-
-    # ---------- Product management ----------
     def AddProduct(self, product):
         """Add a product and index its attributes (both string and numeric)."""
         self.Products[product.UPC.Value] = product
@@ -90,7 +57,6 @@ class   StorageManager:
     def GetProduct(self, upc):
         return self.Products.get(upc)
 
-    # ---------- Batch management ----------
     def AddBatch(self, batch):
         if batch.BatchID in self.BatchByID:
             return
@@ -129,13 +95,57 @@ class   StorageManager:
     def DoesBatchIDExist(self, batch):
         return batch.BatchID in self.BatchByID
 
-    # ---------- Rebuilding indexes ----------
+    def BulkRemoveBatches(self, batchIDs) -> int:
+        ids_to_remove = set()
+        for bid in batchIDs:
+            if bid in self.BatchByID:
+                ids_to_remove.add(bid)
+
+        if not ids_to_remove:
+            return 0
+
+        for bid in ids_to_remove:
+            batch = self.BatchByID.pop(bid)
+
+            # ProductToBatchIndex
+            upc_set = self.ProductToBatchIndex.get(batch.ProductUPC)
+            if upc_set is not None:
+                upc_set.discard(bid)
+                if not upc_set:
+                    del self.ProductToBatchIndex[batch.ProductUPC]
+
+            # BatchKeywordIndex
+            state = batch.State.lower()
+            for key in (state, f"state:{state}"):
+                s = self.BatchKeywordIndex.get(key)
+                if s is not None:
+                    s.discard(bid)
+            exp_key = "noexpiration" if batch.ExpirationDate is None else "hasexpiration"
+            s = self.BatchKeywordIndex.get(exp_key)
+            if s is not None:
+                s.discard(bid)
+
+        # Clean up empty keyword sets in one sweep
+        empty = [k for k, v in self.BatchKeywordIndex.items() if not v]
+        for k in empty:
+            del self.BatchKeywordIndex[k]
+
+        for store in (self.BatchNumericIndexes, self.BatchDeltaNumericIndexes):
+            empty_fields = []
+            for field, entries in store.items():
+                store[field] = [(v, b) for v, b in entries if b not in ids_to_remove]
+                if not store[field]:
+                    empty_fields.append(field)
+            for f in empty_fields:
+                del store[f]
+
+        return len(ids_to_remove)
+
     def RebuildProductIndex(self):
         self.ProductKeywordIndex.clear()
         self.ProductNumericIndexes.clear()
         self.ProductDeltaNumericIndexes.clear()
-        self.ProductAttributeNameCounts.clear()
-        for prod in self.Products.values():
+        for prod in Product.ProductCache:   # Assumes Product.ProductCache exists
             self._indexProduct(prod)
         # Sort numeric indexes
         for index in self.ProductNumericIndexes.values():
@@ -146,136 +156,12 @@ class   StorageManager:
         self.BatchNumericIndexes.clear()
         self.BatchDeltaNumericIndexes.clear()
 
-    def SetProductEnum(self, productEnum):
-        self.ProductEnum = productEnum
-
-    def SaveDatabase(self, file_path: str):
-        payload = {
-            "products": [],
-            "batches": [],
-            "enums": {},
-            "indexes": {
-                "product_keywords": {k: list(v) for k, v in self.ProductKeywordIndex.items()},
-                "batch_keywords": {k: list(v) for k, v in self.BatchKeywordIndex.items()},
-                "product_to_batch": {k: list(v) for k, v in self.ProductToBatchIndex.items()},
-                "product_numeric": {k: v for k, v in self.ProductNumericIndexes.items()},
-                "product_delta_numeric": {k: v for k, v in self.ProductDeltaNumericIndexes.items()},
-                "batch_numeric": {k: v for k, v in self.BatchNumericIndexes.items()},
-                "batch_delta_numeric": {k: v for k, v in self.BatchDeltaNumericIndexes.items()},
-            },
-        }
-
-        if self.ProductEnum is not None:
-            payload["enums"] = {
-                enum_name: {
-                    "type": self.ProductEnum.GetType(enum_name),
-                    "values": self.ProductEnum.GetValues(enum_name),
-                }
-                for enum_name in self.ProductEnum.EnumNames()
-            }
-
-        for product in self.Products.values():
-            product_data = {
-                "UPC": product.UPC.Value,
-                "Name": product.Name.Value,
-                "attributes": [
-                    {
-                        "name": attr_name,
-                        "value": attr.Value,
-                        "type": attr.Type,
-                        "is_enum": attr.IsEnum,
-                        "enum_name": attr.EnumName,
-                    }
-                    for attr_name, attr in product.__dict__.items()
-                    if not attr_name.startswith("_") and isinstance(attr, Attribute)
-                ],
-            }
-            payload["products"].append(product_data)
-
         for batch in self.BatchByID.values():
-            payload["batches"].append({
-                "BatchID": batch.BatchID,
-                "ProductUPC": batch.ProductUPC,
-                "Amount": batch.Amount,
-                "State": batch.State,
-                "ImportedDate": batch.ImportedDate.isoformat(),
-                "ExpirationDate": batch.ExpirationDate.isoformat() if batch.ExpirationDate is not None else None,
-            })
+            self._indexBatch(batch, useDelta=False)
 
-        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2)
-        return True
+        for index in self.BatchNumericIndexes.values():
+            index.sort(key=lambda x: x[0])
 
-    def LoadDatabase(self, file_path: str, productEnum=None):
-        if not os.path.exists(file_path):
-            return False
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as fh:
-                payload = json.load(fh)
-        except (json.JSONDecodeError, ValueError, OSError) as exc:
-            return False
-
-        self.Products.clear()
-        self.BatchByID.clear()
-        self.ProductKeywordIndex.clear()
-        self.BatchKeywordIndex.clear()
-        self.ProductToBatchIndex.clear()
-        self.ProductNumericIndexes.clear()
-        self.ProductDeltaNumericIndexes.clear()
-        self.BatchNumericIndexes.clear()
-        self.BatchDeltaNumericIndexes.clear()
-        self.ProductAttributeNameCounts.clear()
-
-        if productEnum is not None:
-            self.ProductEnum = productEnum
-            self.ProductEnum._enums.clear()
-        elif self.ProductEnum is not None:
-            self.ProductEnum._enums.clear()
-
-        enums = payload.get("enums", {})
-        for enum_name, enum_data in enums.items():
-            if self.ProductEnum is not None:
-                self.ProductEnum.NewEnum(enum_name, enum_data.get("type", "string"))
-                for val in enum_data.get("values", []):
-                    self.ProductEnum.AddToEnum(enum_name, val)
-
-        for product_data in payload.get("products", []):
-            product = Product(product_data["UPC"], product_data["Name"])
-            for attr in product_data.get("attributes", []):
-                if attr["name"] in ("UPC", "Name"):
-                    continue
-                product.AddAttribute(
-                    attr["name"],
-                    attr["value"],
-                    attr["type"],
-                    attr["is_enum"],
-                    attr.get("enum_name"),
-                )
-            self.Products[product.UPC.Value] = product
-            self._indexProduct(product)
-
-        max_batch_id = -1
-        for batch_data in payload.get("batches", []):
-            batch = Batch(batch_data["ProductUPC"], batch_data["Amount"], batch_data["State"])
-            batch.BatchID = batch_data["BatchID"]
-            batch.ImportedDate = dt.datetime.fromisoformat(batch_data["ImportedDate"])
-            batch.ExpirationDate = dt.datetime.fromisoformat(batch_data["ExpirationDate"]) if batch_data.get("ExpirationDate") else None
-            self.BatchByID[batch.BatchID] = batch
-            if batch.ProductUPC not in self.ProductToBatchIndex:
-                self.ProductToBatchIndex[batch.ProductUPC] = set()
-            self.ProductToBatchIndex[batch.ProductUPC].add(batch.BatchID)
-            self._indexBatch(batch)
-            max_batch_id = max(max_batch_id, batch.BatchID)
-
-        if max_batch_id >= 0:
-            BatchModule.Data["BatchID"] = max_batch_id
-
-        self.OptimizeDatabase()
-        return True
-
-    # ---------- Internal product index helpers ----------
     def _addToProductKeyword(self, key: str, upc: str):
         key = key.lower()
         if key not in self.ProductKeywordIndex:
@@ -316,13 +202,14 @@ class   StorageManager:
             # Index the attribute name itself (e.g., "size", "price")
             self._addToProductKeyword(attr.lower(), upc)
 
-            value_str = str(data.Value).lower()
-            self._addToProductKeyword(value_str, upc)
+            # Index string values
             if data.Type == "string" and isinstance(data.Value, str):
-                for token in value_str.split():
+                value = data.Value.lower()
+                self._addToProductKeyword(value, upc)
+                for token in value.split():
                     self._addToProductKeyword(token, upc)
-            # Field‑specific keyword for exact field search
-            self._addToProductKeyword(f"{attr.lower()}:{value_str}", upc)
+                # Field‑specific keyword for exact field search
+                self._addToProductKeyword(f"{attr.lower()}:{value}", upc)
 
     def _removeProduct(self, prod):
         upc = prod.UPC.Value
@@ -331,14 +218,13 @@ class   StorageManager:
                 continue
             self._removeProductAttributeName(attr)
             self._removeFromProductKeyword(attr.lower(), upc)
-            value_str = str(data.Value).lower()
-            self._removeFromProductKeyword(value_str, upc)
             if data.Type == "string" and isinstance(data.Value, str):
-                for token in value_str.split():
+                value = data.Value.lower()
+                self._removeFromProductKeyword(value, upc)
+                for token in value.split():
                     self._removeFromProductKeyword(token, upc)
-            self._removeFromProductKeyword(f"{attr.lower()}:{value_str}", upc)
+                self._removeFromProductKeyword(f"{attr.lower()}:{value}", upc)
 
-    # ---------- Internal batch index helpers ----------
     def _addToBatchKeyword(self, key: str, batchID: int):
         key = key.lower()
         if key not in self.BatchKeywordIndex:
@@ -408,7 +294,6 @@ class   StorageManager:
                 del target[field]
 
     def OptimizeDatabase(self):
-        """Merge delta numeric indexes (both product and batch) into their main sorted indexes."""
         # Merge product delta into product main
         for field, delta in self.ProductDeltaNumericIndexes.items():
             if field not in self.ProductNumericIndexes:

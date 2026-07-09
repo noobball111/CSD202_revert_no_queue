@@ -1,5 +1,4 @@
 import copy
-import re
 import time
 import random
 import string
@@ -121,7 +120,6 @@ class EnumEditor:
         if changed:
             self._generateCount = max(1, self._generateCount)
         imgui.same_line()
-        imgui.set_next_item_width(em_size(2))
         if imgui.button("Generate Enums"):
             self._GenerateRandomEnums(self._generateCount)
 
@@ -191,8 +189,6 @@ class ProductEditor:
         self._productToDelete = None
         self._deletePopupOpen = False
         self.numProductsToGenerate = 5
-        self.generate_random_fields = True
-        self.generate_use_enums = True
 
         self._PrefillDemoProducts()
 
@@ -225,8 +221,6 @@ class ProductEditor:
         debug_print(f"Generating {count} random products...")
         adjectives = ["Big", "Small", "Tasty", "Fresh", "Organic", "Premium", "Deluxe", "Classic", "Chewy", "Crispy"]
         nouns = ["Apple", "Banana", "Cherry", "Date", "Elderberry", "Fig", "Grape", "Honeydew", "Kiwi", "Lemon"]
-        enum_names = list(self.ProductEnum.EnumNames()) if self.ProductEnum else []
-
         for i in range(count):
             name = f"{random.choice(adjectives)} {random.choice(nouns)} {i+1}"
             upc = ''.join(random.choices(string.digits, k=8))
@@ -234,29 +228,12 @@ class ProductEditor:
             attrs = {
                 "Size": random.choice(["S", "M", "L", "XL"]),
                 "Price": round(random.uniform(1.0, 20.0), 2),
+                "Stock": random.randint(0, 100),
                 "OnSale": random.choice([True, False])
             }
             for field, value in attrs.items():
                 typ = "string" if isinstance(value, str) else "int" if isinstance(value, int) else "float" if isinstance(value, float) else "bool"
                 product.AddAttribute(field, value, typ, False)
-
-            if self.generate_use_enums and enum_names:
-                enum_choices = random.sample(enum_names, k=min(2, len(enum_names)))
-                for enum_name in enum_choices:
-                    values = self.ProductEnum.GetValues(enum_name)
-                    if not values:
-                        continue
-                    value = random.choice(values)
-                    product.AddAttribute(enum_name, value, self.ProductEnum.GetType(enum_name), True, enum_name)
-
-            if self.generate_random_fields:
-                extra_fields = random.randint(1, 3)
-                for j in range(extra_fields):
-                    field_name = self._GetFieldNoCollision(product.__dict__)
-                    value = random.choice(["Extra", "Option", "Value", 1, 2, 3, 4.5, False])
-                    typ = "string" if isinstance(value, str) else "int" if isinstance(value, int) else "float" if isinstance(value, float) else "bool"
-                    product.AddAttribute(field_name, value, typ, False)
-
             self.StorageManager.AddProduct(product)
         self.searchEngine.Rebuild()
         self._UpdateFilteredProducts()
@@ -776,23 +753,8 @@ class ProductEditor:
         if changed:
             self.numProductsToGenerate = max(1, self.numProductsToGenerate)
         imgui.same_line()
-        imgui.set_next_item_width(em_size(2))
         if imgui.button("Generate Products"):
             self._GenerateRandomProducts(self.numProductsToGenerate)
-        imgui.same_line()
-        if imgui.button("Use Enums"):
-            self.generate_use_enums = not self.generate_use_enums
-        imgui.same_line()
-        imgui.text("Enums: ")
-        imgui.same_line()
-        imgui.text_colored(ImVec4(0.2, 1.0, 0.2, 1.0) if self.generate_use_enums else ImVec4(1.0, 0.2, 0.2, 1.0), "ON" if self.generate_use_enums else "OFF")
-        imgui.same_line()
-        if imgui.button("Random Fields"):
-            self.generate_random_fields = not self.generate_random_fields
-        imgui.same_line()
-        imgui.text("Fields: ")
-        imgui.same_line()
-        imgui.text_colored(ImVec4(0.2, 1.0, 0.2, 1.0) if self.generate_random_fields else ImVec4(1.0, 0.2, 0.2, 1.0), "ON" if self.generate_random_fields else "OFF")
         imgui.same_line()
         if self._searching:
             imgui.text("Searching...")
@@ -806,13 +768,8 @@ class ProductEditor:
         # ---- Search bar with enter_returns_true ----
         imgui.text("Search Products:")
         imgui.same_line()
-        if self._refocus:
-            imgui.set_keyboard_focus_here()
         flags = imgui.InputTextFlags_.enter_returns_true
-        if self._refocus:
-            flags |= imgui.InputTextFlags_.auto_select_all
         changed, self.searchQuery = imgui.input_text("##search", self.searchQuery, flags=flags)
-        self._refocus = False
 
         # ---- Live suggestions ----
         is_active = imgui.is_item_active()
@@ -922,12 +879,8 @@ class ProductEditor:
 
         sorted_products = sorted(self.filteredProducts, key=lambda p: p.Name.Value)
         if imgui.begin_child("RealProductsChild", size=ImVec2(0, 0), child_flags=imgui.ChildFlags_.borders):
-            clipper = imgui.ListClipper()
-            clipper.begin(len(sorted_products))
-            while clipper.step():
-                for idx in range(clipper.display_start, clipper.display_end):
-                    self._DrawRealProduct(sorted_products[idx])
-            clipper.end()
+            for product in sorted_products:
+                self._DrawRealProduct(product)
         imgui.end_child()
 
     def _apply_suggestion(self, sugg):
@@ -964,31 +917,31 @@ class ProductEditor:
         last_token = tokens[-1]
         debug_print(f"Last token: '{last_token}'")
 
+        # Check if previous token is a field prefix (e.g., "size:")
+        field = None
+        if len(tokens) >= 2:
+            prev_token = tokens[-2]
+            if prev_token.endswith(":") and prev_token[:-1] in self.searchEngine._fieldTries:
+                field = prev_token[:-1]
+                debug_print(f"Previous token is field prefix: '{field}'")
+
         suggestions = []
-        if ":" in last_token:
-            raw_suggestions = self.searchEngine.Autocomplete(last_token)
-            suggestions = [s for s in raw_suggestions if s != last_token][:10]
+
+        if field:
+            field_trie = self.searchEngine._fieldTries.get(field)
+            if field_trie:
+                raw_suggestions = field_trie.Find(last_token)
+                suggestions = [v for v in raw_suggestions if ":" not in v][:10]
         else:
-            field = None
-            if len(tokens) >= 2:
-                prev_token = tokens[-2]
-                if prev_token.endswith(":") and prev_token[:-1] in self.searchEngine._fieldTries:
-                    field = prev_token[:-1]
-                    debug_print(f"Previous token is field prefix: '{field}'")
-            if field:
-                field_trie = self.searchEngine._fieldTries.get(field)
-                if field_trie:
-                    raw_suggestions = field_trie.Find(last_token)
-                    suggestions = [f"{field}:{v}" for v in raw_suggestions if v and v != last_token][:10]
-            else:
-                raw_suggestions = self.searchEngine.GetSuggestions(last_token)
-                for sugg in raw_suggestions:
+            raw_suggestions = self.searchEngine.GetSuggestions(last_token)
+            for sugg in raw_suggestions:
+                if sugg.endswith(":") or (":" not in sugg and " " not in sugg):
                     if sugg != last_token:
                         suggestions.append(sugg)
-                    if len(suggestions) >= 10:
-                        break
+                if len(suggestions) >= 10:
+                    break
 
-        self.searchSuggestions = suggestions[:10]
+        self.searchSuggestions = suggestions
         self.showSuggestions = bool(self.searchSuggestions)
         debug_print(f"Suggestions: {self.searchSuggestions} (show={self.showSuggestions})")
 
@@ -1086,7 +1039,7 @@ class ProductEditor:
 
 # ---------- BatchEditor ----------
 class BatchEditor:
-    def __init__(self, storageManager, prefill_demo: bool = True):
+    def __init__(self, storageManager):
         self.StorageManager = storageManager
         self.searchEngine = SearchEngine(storageManager, index_type='batch')
         self.ToBeBatches = []
@@ -1114,8 +1067,16 @@ class BatchEditor:
         self._productFilter = ""
         self._generateBatchCount = 5
 
-        if prefill_demo:
-            self._prefillDemoBatches()
+        # Range filter state
+        self._rangeEnabled = False
+        self._rangeStart = 0
+        self._rangeEnd = 100
+
+        # Bulk delete state
+        self._bulkDeleteConfirm = False
+        self._bulkDeleteIds: List[int] = []
+
+        self._prefillDemoBatches()
 
     # ---------- Index maintenance ----------
     def _reindexBatch(self, batch):
@@ -1164,6 +1125,7 @@ class BatchEditor:
                 delta = dt.timedelta(days=random.randint(1, 365))
                 batch.SetExpirationDate(dt.datetime.now() + delta)
             self.StorageManager.AddBatch(batch)
+            debug_print(f"Generated batch {batch.BatchID} for UPC {upc}")
         self.searchEngine.Rebuild()
         self._updateFilteredBatches()
         debug_print(f"Generated {count} batches.")
@@ -1265,11 +1227,10 @@ class BatchEditor:
         include_sets = []
         for kw in include:
             s = self._getBatchIDsForKeyword(kw)
-            include_sets.append(s)
+            if s:
+                include_sets.append(s)
 
         if include_sets:
-            if any(len(s) == 0 for s in include_sets):
-                return []
             result = min(include_sets, key=len)
             for s in include_sets:
                 if s is not result:
@@ -1284,47 +1245,60 @@ class BatchEditor:
 
         return sorted(result)
 
+    # Compiled once at class level – matches "amount>=10", "amount>5.5", etc.
+    _NUMERIC_RE = __import__('re').compile(r'^([a-z_]\w*)(>=|<=|==|!=|>|<)([\d.]+)$')
+
     def _getBatchIDsForKeyword(self, keyword: str) -> Set[int]:
-        keyword = keyword.lower().strip()
+        import bisect
+        keyword = keyword.lower()
         batch_ids = set()
 
-        # Numeric comparisons like amount>20 or amount<=10
-        numeric_match = re.match(r"^([a-zA-Z_][\w]*)\s*(<=|>=|<|>|==|=)\s*(.+)$", keyword)
-        if numeric_match:
-            field, op, raw_value = numeric_match.groups()
-            field = field.lower()
-            raw_value = raw_value.strip()
+        # ---- Numeric comparison: field>=X  field<=X  field>X  field<X  field==X  field!=X ----
+        m = self._NUMERIC_RE.match(keyword)
+        if m:
+            field = m.group(1)
+            op    = m.group(2)
             try:
-                if field == "amount":
-                    value = int(raw_value)
-                elif field in ("importeddate", "expirationdate"):
-                    # Support ISO date comparisons for batch date fields.
-                    value = dt.datetime.fromisoformat(raw_value).timestamp()
-                else:
-                    value = float(raw_value)
-            except (ValueError, TypeError):
-                return set()
-            return self.StorageManager.GetBatchIDsByNumericComparison(field, op, value)
+                value = float(m.group(3))
+            except ValueError:
+                return batch_ids
 
-        # Exact numeric field match using colon syntax
-        field_exact_match = re.match(r"^([a-zA-Z_][\w]*):(.*)$", keyword)
-        if field_exact_match:
-            field, raw_value = field_exact_match.groups()
-            field = field.lower()
-            raw_value = raw_value.strip()
-            if field == "amount":
-                try:
-                    value = int(raw_value)
-                    return self.StorageManager.GetBatchIDsByNumericComparison(field, "=", value)
-                except ValueError:
-                    pass
-            if field in ("importeddate", "expirationdate"):
-                try:
-                    value = dt.datetime.fromisoformat(raw_value).timestamp()
-                    return self.StorageManager.GetBatchIDsByNumericComparison(field, "=", value)
-                except ValueError:
-                    pass
+            # Main index is sorted → use bisect for O(log N + K)
+            main = self.StorageManager.BatchNumericIndexes.get(field, [])
+            if main:
+                vals = [e[0] for e in main]
+                if op == '>':
+                    batch_ids.update(bid for _, bid in main[bisect.bisect_right(vals, value):])
+                elif op == '>=':
+                    batch_ids.update(bid for _, bid in main[bisect.bisect_left(vals, value):])
+                elif op == '<':
+                    batch_ids.update(bid for _, bid in main[:bisect.bisect_left(vals, value)])
+                elif op == '<=':
+                    batch_ids.update(bid for _, bid in main[:bisect.bisect_right(vals, value)])
+                elif op == '==':
+                    lo = bisect.bisect_left(vals, value)
+                    hi = bisect.bisect_right(vals, value)
+                    batch_ids.update(bid for _, bid in main[lo:hi])
+                elif op == '!=':
+                    lo = bisect.bisect_left(vals, value)
+                    hi = bisect.bisect_right(vals, value)
+                    batch_ids.update(bid for _, bid in main[:lo])
+                    batch_ids.update(bid for _, bid in main[hi:])
 
+            # Delta index is unsorted → linear scan
+            delta = self.StorageManager.BatchDeltaNumericIndexes.get(field, [])
+            for v, bid in delta:
+                if   op == '>'  and v >  value: batch_ids.add(bid)
+                elif op == '>=' and v >= value: batch_ids.add(bid)
+                elif op == '<'  and v <  value: batch_ids.add(bid)
+                elif op == '<=' and v <= value: batch_ids.add(bid)
+                elif op == '==' and v == value: batch_ids.add(bid)
+                elif op == '!=' and v != value: batch_ids.add(bid)
+
+            debug_print(f"Numeric query '{keyword}': {len(batch_ids)} matches")
+            return batch_ids
+
+        # ---- Text keyword lookup ----
         if keyword in self.StorageManager.BatchKeywordIndex:
             batch_ids.update(self.StorageManager.BatchKeywordIndex[keyword])
 
@@ -1352,11 +1326,6 @@ class BatchEditor:
     # ---------- UI: Real Batches (editable) ----------
     def _drawBatch(self, batch):
         batch_id = batch.BatchID
-        expired = batch.ExpirationDate is not None and batch.ExpirationDate < dt.datetime.now()
-        low_amount = batch.Amount < 10
-
-        if expired or low_amount:
-            imgui.push_style_color(imgui.Col_.text, ImVec4(1.0, 0.1, 0.1, 1.0))
 
         imgui.push_id(f"batch_{batch_id}")
 
@@ -1375,19 +1344,6 @@ class BatchEditor:
             batch.Amount = max(1, amount)
             self._reindexBatch(batch)
             self._updateFilteredBatches()
-
-        imgui.same_line()
-        imgui.text(f"Imported: {batch.ImportedDate.strftime('%Y-%m-%d')}")
-
-        if batch.ExpirationDate:
-            imgui.same_line()
-            imgui.text(f"Expiration: {batch.ExpirationDate.strftime('%Y-%m-%d')}")
-        else:
-            imgui.same_line()
-            imgui.text("Expiration: None")
-
-        if expired or low_amount:
-            imgui.pop_style_color()
 
         imgui.same_line()
 
@@ -1447,15 +1403,19 @@ class BatchEditor:
 
         if self._refocus:
             imgui.set_keyboard_focus_here()
+            self._refocus = False
+
         flags = imgui.InputTextFlags_.enter_returns_true
-        if self._refocus:
-            flags |= imgui.InputTextFlags_.auto_select_all
-
-        imgui.set_next_item_width(em_size(15))
         changed, self.searchQuery = imgui.input_text("##batch_search", self.searchQuery, flags=flags)
-        self._refocus = False
 
+        # BUG FIX: Close suggestions when input loses focus (scrolled off-screen, clicked away).
+        # CRITICAL: must NOT close when `changed` is True — pressing Enter deactivates the input
+        # (is_active=False) in the same frame it fires changed=True, so checking only is_active
+        # would wipe showSuggestions before the `if changed:` block below can consume it.
         is_active = imgui.is_item_active()
+        if not is_active and not self._justSelected and not changed:
+            self.showSuggestions = False
+
         if is_active and self.searchQuery != self._prevSearchQuery:
             self._prevSearchQuery = self.searchQuery
             debug_print(f"Live batch search: '{self.searchQuery}'")
@@ -1478,8 +1438,9 @@ class BatchEditor:
 
         if self.showSuggestions:
             pos = ImVec2(input_rect_min.x, input_rect_max.y)
+            sugg_width = max(100.0, input_rect_max.x - input_rect_min.x)
             imgui.set_next_window_pos(pos)
-            imgui.set_next_window_size(ImVec2(input_rect_max.x - input_rect_min.x, 200))
+            imgui.set_next_window_size(ImVec2(sugg_width, 200))
             window_flags = (
                 imgui.WindowFlags_.no_title_bar |
                 imgui.WindowFlags_.no_resize |
@@ -1488,7 +1449,8 @@ class BatchEditor:
                 imgui.WindowFlags_.no_scrollbar
             )
             imgui.begin("##batch_suggestions_window", None, window_flags)
-            debug_print(f"Drawing suggestions with {len(self.searchSuggestions)} items")
+            win_pos = imgui.get_window_pos()
+            win_size = imgui.get_window_size()
             for idx, sugg in enumerate(self.searchSuggestions):
                 is_selected = (idx == self._suggestionIndex)
                 imgui.selectable(sugg, is_selected)
@@ -1497,27 +1459,16 @@ class BatchEditor:
                     self._applySuggestion(sugg)
                 if imgui.is_item_hovered():
                     self._suggestionIndex = idx
-
-            win_pos = imgui.get_window_pos()
-            win_size = imgui.get_window_size()
-            win_rect_min = win_pos
-            win_rect_max = win_pos + win_size
-
+            # Close when mouse clicked outside
             if imgui.is_mouse_clicked(0):
-                mouse_pos = imgui.get_mouse_pos()
-                in_input = (
-                    input_rect_min.x <= mouse_pos.x <= input_rect_max.x and
-                    input_rect_min.y <= mouse_pos.y <= input_rect_max.y
-                )
-                in_window = (
-                    win_rect_min.x <= mouse_pos.x <= win_rect_max.x and
-                    win_rect_min.y <= mouse_pos.y <= win_rect_max.y
-                )
-                if not in_input and not in_window:
-                    debug_print("Mouse clicked outside batch suggestions, closing suggestions")
+                mp = imgui.get_mouse_pos()
+                in_input = (input_rect_min.x <= mp.x <= input_rect_max.x and
+                            input_rect_min.y <= mp.y <= input_rect_max.y)
+                in_win = (win_pos.x <= mp.x <= win_pos.x + win_size.x and
+                          win_pos.y <= mp.y <= win_pos.y + win_size.y)
+                if not in_input and not in_win:
                     self.showSuggestions = False
                     self._suggestionIndex = 0
-
             imgui.end()
 
         # ---- Keyboard navigation ----
@@ -1559,38 +1510,97 @@ class BatchEditor:
                 imgui.text(f"{self._searchResultsCount} results in {self._searchTime:.4f}s")
             else:
                 imgui.text(f"{len(self.filteredBatchIDs)} batches")
-        imgui.same_line()
-        if imgui.button("Optimize Database"):
-            self.StorageManager.OptimizeDatabase()
-            self.searchEngine.Rebuild()
-            self._updateFilteredBatches()
-            debug_print("Database optimized.")
-        imgui.same_line()
-        if imgui.button("Save Database"):
-            saved = self.StorageManager.SaveDatabase("data.txt")
-            debug_print(f"Save Database: {'success' if saved else 'failed'}")
+
         imgui.separator()
 
-        if not self.filteredBatchIDs:
-            if self.searchQuery.strip():
-                imgui.text("No batches match your search.")
+        # ---- Range filter controls ----
+        changed_range, self._rangeEnabled = imgui.checkbox("Range##batch_range", self._rangeEnabled)
+        if self._rangeEnabled:
+            imgui.same_line()
+            imgui.text("From:")
+            imgui.same_line()
+            imgui.set_next_item_width(70)
+            _, self._rangeStart = imgui.input_int("##range_from", self._rangeStart)
+            self._rangeStart = max(0, self._rangeStart)
+            imgui.same_line()
+            imgui.text("To:")
+            imgui.same_line()
+            imgui.set_next_item_width(70)
+            _, self._rangeEnd = imgui.input_int("##range_to", self._rangeEnd)
+            self._rangeEnd = max(self._rangeStart + 1, self._rangeEnd)
+
+        # Build the visible ID list (apply range slice if enabled)
+        if self._rangeEnabled:
+            visible_ids = self.filteredBatchIDs[self._rangeStart:self._rangeEnd]
+            range_label = f"[{self._rangeStart}:{min(self._rangeEnd, len(self.filteredBatchIDs))}]"
+        else:
+            visible_ids = self.filteredBatchIDs
+            range_label = ""
+
+        # Count only IDs that still exist in storage (stale IDs from non-optimized indexes)
+        existing_count = sum(1 for bid in visible_ids if bid in self.StorageManager.BatchByID)
+
+        # ---- Bulk delete button ----
+        imgui.same_line()
+        imgui.push_style_color(imgui.Col_.button, ImVec4(0.65, 0.1, 0.1, 1.0))
+        imgui.push_style_color(imgui.Col_.button_hovered, ImVec4(0.85, 0.2, 0.2, 1.0))
+        imgui.push_style_color(imgui.Col_.button_active, ImVec4(0.45, 0.0, 0.0, 1.0))
+        bulk_label = f"Delete All in Results{' ' + range_label if range_label else ''} ({existing_count})"
+        if imgui.button(bulk_label):
+            self._bulkDeleteIds = [bid for bid in visible_ids if bid in self.StorageManager.BatchByID]
+            if self._bulkDeleteIds:
+                self._bulkDeleteConfirm = True
+                debug_print(f"Bulk delete requested for {len(self._bulkDeleteIds)} batches")
+        imgui.pop_style_color(3)
+
+        # BUG FIX: Always call _showDeletePopup and _showBulkDeletePopup regardless of
+        # whether the list is empty — otherwise open modals can get stuck permanently.
+        if not visible_ids:
+            if self.searchQuery.strip() or self._rangeEnabled:
+                imgui.text("No batches in this view.")
             else:
                 imgui.text("No batches stored.")
+            self._showDeletePopup()
+            self._showBulkDeletePopup()
             return
 
+        # ---- Batch list with culling ----
+        # BUG FIX: end_child() must ALWAYS be called after begin_child(), even when
+        # begin_child() returns False (child fully scrolled/clipped out of view).
+        # The original code had end_child() inside the `if` block, corrupting the
+        # ImGui push/pop stack when the child was scrolled out of the parent window.
         if imgui.begin_child("BatchList", size=ImVec2(0, 0), child_flags=imgui.ChildFlags_.borders):
-            clipper = imgui.ListClipper()
-            clipper.begin(len(self.filteredBatchIDs))
-            while clipper.step():
-                for idx in range(clipper.display_start, clipper.display_end):
-                    batch_id = self.filteredBatchIDs[idx]
-                    batch = self.StorageManager.GetBatch(batch_id)
-                    if batch:
-                        self._drawBatch(batch)
-            clipper.end()
-            imgui.end_child()
+            item_height = imgui.get_frame_height_with_spacing()
+            scroll_y = imgui.get_scroll_y()
+            win_h = imgui.get_window_height()
+
+            n = len(visible_ids)
+            # Leave a small buffer around the viewport edges
+            first_vis = max(0, int(scroll_y / item_height) - 1)
+            last_vis = min(n, int((scroll_y + win_h) / item_height) + 2)
+
+            # Spacer for skipped items above viewport
+            if first_vis > 0:
+                imgui.dummy(ImVec2(0.0, first_vis * item_height))
+
+            for i in range(first_vis, last_vis):
+                # BUG FIX: use .get() instead of GetBatch() (which raises KeyError) so
+                # stale IDs in non-optimized indexes don't crash the renderer.
+                batch = self.StorageManager.BatchByID.get(visible_ids[i])
+                if batch is not None:
+                    self._drawBatch(batch)
+                else:
+                    debug_print(f"[{time.strftime('%M:%S')}] Stale batch ID {visible_ids[i]} skipped (not in storage, optimize to clear)")
+
+            # Spacer for skipped items below viewport
+            remaining = n - last_vis
+            if remaining > 0:
+                imgui.dummy(ImVec2(0.0, remaining * item_height))
+
+        imgui.end_child()  # BUG FIX: always called, outside the `if` block
 
         self._showDeletePopup()
+        self._showBulkDeletePopup()
 
     def _updateSuggestions(self):
         if not self.searchQuery.strip():
@@ -1603,9 +1613,9 @@ class BatchEditor:
         last_token = tokens[-1] if tokens else ""
         suggestions = []
         if last_token:
-            raw = self.searchEngine.Autocomplete(last_token)
+            raw = self.searchEngine.GetSuggestions(last_token)
             for sugg in raw:
-                if sugg != last_token:
+                if " " not in sugg and sugg != last_token:
                     suggestions.append(sugg)
             self.searchSuggestions = suggestions[:10]
         self.showSuggestions = bool(self.searchSuggestions)
@@ -1625,6 +1635,9 @@ class BatchEditor:
             imgui.text("No pending batches.")
             return
 
+        # BUG FIX: end_child() must ALWAYS be called after begin_child(), even when
+        # begin_child() returns False (child scrolled/clipped). Original had end_child()
+        # inside the `if` which corrupted ImGui's push/pop stack when clipped.
         if imgui.begin_child("PendingBatchesChild", size=ImVec2(0, 300), child_flags=imgui.ChildFlags_.borders):
             i = 0
             while i < len(self.ToBeBatches):
@@ -1703,7 +1716,7 @@ class BatchEditor:
                     imgui.pop_id()
                 i += 1
 
-            imgui.end_child()
+        imgui.end_child()  # BUG FIX: always outside the `if` block
 
         if imgui.begin_popup("BatchSaveErrorsPopup"):
             imgui.text("Validation errors occurred. Please fix them:")
@@ -1744,8 +1757,38 @@ class BatchEditor:
                 imgui.close_current_popup()
             imgui.end_popup()
 
+    # ---------- Bulk delete popup ----------
+    def _showBulkDeletePopup(self):
+        if self._bulkDeleteConfirm:
+            imgui.open_popup("BulkDeleteConfirmPopup")
+            self._bulkDeleteConfirm = False
+
+        if imgui.begin_popup_modal("BulkDeleteConfirmPopup", None, imgui.WindowFlags_.always_auto_resize)[0]:
+            count = len(self._bulkDeleteIds)
+            imgui.text(f"Permanently delete {count} batch{'es' if count != 1 else ''}?")
+            imgui.text("This cannot be undone.")
+            imgui.separator()
+            if imgui.button("Yes, Delete All"):
+                debug_print(f"[{time.strftime('%M:%S')}] Bulk deleting {count} batches...")
+                # BulkRemoveBatches removes all from dict/keyword indexes in O(N),
+                # then does ONE pass to filter numeric lists — far faster than calling
+                # RemoveBatch in a loop (which would do N separate O(M) list rebuilds).
+                removed = self.StorageManager.BulkRemoveBatches(self._bulkDeleteIds)
+                debug_print(f"[{time.strftime('%M:%S')}] Bulk delete done: {removed} removed")
+                self._bulkDeleteIds = []
+                self.searchEngine.Rebuild()
+                self._updateFilteredBatches()
+                imgui.close_current_popup()
+            imgui.same_line()
+            if imgui.button("Cancel"):
+                self._bulkDeleteIds = []
+                imgui.close_current_popup()
+            imgui.end_popup()
+
     # ---------- Main Draw ----------
     def Draw(self):
+        imgui.push_id("BatchEditor")
+
         imgui.text("Real Batches")
         imgui.separator()
         self.ShowBatches()
@@ -1761,26 +1804,20 @@ class BatchEditor:
         if changed:
             self._generateBatchCount = max(1, self._generateBatchCount)
         imgui.same_line()
-        imgui.set_next_item_width(em_size(2))
         if imgui.button("Generate Batches"):
             self._GenerateRandomBatches(self._generateBatchCount)
+
+        imgui.pop_id()
 
 
 # ---------- MainApp ----------
 class MainApp:
     def __init__(self, storageManager, productEnum):
         self.Filter = imgui.TextFilter()
-        self.StorageManager = storageManager
-        self.StorageManager.SetProductEnum(productEnum)
-        self.StorageManager.LoadDatabase("data.txt", productEnum)
         self.ProductEditor = ProductEditor(storageManager, productEnum)
         self.EnumEditor = EnumEditor(productEnum)
         self.BatchEditor = BatchEditor(storageManager)
-        self.ProductEditor.searchEngine.Rebuild()
-        self.BatchEditor.searchEngine.Rebuild()
-        self.StorageManager.OptimizeDatabase()
-        self.ProductEditor._UpdateFilteredProducts()
-        self.BatchEditor._updateFilteredBatches()
+        self.StorageManager = storageManager
 
     def Draw(self):
         if imgui.begin_tab_bar("MainTab"):
